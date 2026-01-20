@@ -41,6 +41,13 @@ class WifiAnalyzerApp:
         self.ctrl_frame = ttk.Frame(root, padding=5)
         self.ctrl_frame.pack(side=tk.TOP, fill=tk.X)
 
+        # WiFiアダプター選択UI
+        ttk.Label(self.ctrl_frame, text="アダプター: ").pack(side=tk.LEFT, padx=5)
+        self.adapter_var = tk.StringVar()
+        self.adapter_combo = ttk.Combobox(self.ctrl_frame, textvariable=self.adapter_var, state='readonly', width=30)
+        self.adapter_combo.pack(side=tk.LEFT, padx=5)
+        self.adapter_combo.bind('<<ComboboxSelected>>', self.on_adapter_change)
+
         self.scan_btn = ttk.Button(self.ctrl_frame, text="手動スキャン", command=self.start_manual_scan)
         self.scan_btn.pack(side=tk.LEFT, padx=5)
 
@@ -76,13 +83,38 @@ class WifiAnalyzerApp:
 
     def init_wifi(self):
         self.wifi = pywifi.PyWiFi()
-        if len(self.wifi.interfaces()) == 0:
+        self.interfaces = self.wifi.interfaces()
+
+        if len(self.interfaces) == 0:
             self.log_message("エラー: Wi-Fiインターフェースが見つかりません。")
             self.scan_btn.config(state='disabled')
             self.iface = None
         else:
-            self.iface = self.wifi.interfaces()[0]
-            self.log_message(f"初期化完了: {self.iface.name()}")
+            # アダプター一覧を作成
+            adapter_names = []
+            for idx, iface in enumerate(self.interfaces):
+                adapter_names.append(f"{idx}: {iface.name()}")
+
+            # コンボボックスに設定
+            self.adapter_combo['values'] = adapter_names
+
+            # デフォルトは最後のアダプター（通常、外部アダプターは後に認識される）
+            default_index = len(self.interfaces) - 1
+            self.adapter_combo.current(default_index)
+            self.iface = self.interfaces[default_index]
+
+            self.log_message(f"初期化完了: {len(self.interfaces)} 個のアダプター検出")
+            self.log_message(f"選択中: {self.iface.name()}")
+
+    def on_adapter_change(self, event=None):
+        """アダプター選択変更時の処理"""
+        selected = self.adapter_combo.current()
+        if 0 <= selected < len(self.interfaces):
+            self.iface = self.interfaces[selected]
+            self.log_message(f"アダプター切り替え: {self.iface.name()}")
+            # キャッシュをクリア
+            self.wifi_cache.clear()
+            self.update_connection_info()
 
     def get_current_connection_info(self):
         ssid = "未接続"
