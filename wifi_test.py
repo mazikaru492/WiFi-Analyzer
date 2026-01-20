@@ -27,6 +27,7 @@ class WifiAnalyzerApp:
         self.target_band = "2.4GHz"
         self.current_results = []
         self.current_ssid = ""
+        self.network_info_list = []  # グラフ上のネットワーク情報リスト
 
         # データ保持（Persistence）機能: キャッシュとTTL設定
         # キー: "SSID_チャンネル", 値: {"signal": 信号強度, "last_seen": 最終検出時刻, "ssid": SSID, "channel": チャンネル, "band": 周波数帯}
@@ -70,6 +71,8 @@ class WifiAnalyzerApp:
         self.fig.subplots_adjust(bottom=0.15)
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.graph_frame)
         self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        # クリックイベントを追加
+        self.canvas.mpl_connect('button_press_event', self.on_graph_click)
         self.log_frame = ttk.LabelFrame(root, text="検出ログ", padding=5)
         self.log_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
         self.log_text = tk.Text(self.log_frame, height=5, state='disabled', font=("MS Gothic", 9))
@@ -149,19 +152,150 @@ class WifiAnalyzerApp:
     def frequency_to_channel(self, freq_value):
         if freq_value is None: return None, None
 
+        # 周波数の単位を正規化
         freq_mhz = freq_value
         if freq_value > 100_000_000:
             freq_mhz = freq_value / 1_000_000
         elif freq_value > 100_000:
             freq_mhz = freq_value / 1_000
 
-        if 2412 <= freq_mhz <= 2484:
-            ch = 14 if abs(freq_mhz - 2484) < 1 else int((freq_mhz - 2412) // 5 + 1)
-            return ch, "2.4GHz"
-        elif 5170 <= freq_mhz <= 5895:
-            ch = int((freq_mhz - 5180) / 5) + 36
-            return ch, "5GHz"
+        # 2.4GHz帯の正確なマッピング
+        channels_24ghz = {
+            2412: 1, 2417: 2, 2422: 3, 2427: 4, 2432: 5,
+            2437: 6, 2442: 7, 2447: 8, 2452: 9, 2457: 10,
+            2462: 11, 2467: 12, 2472: 13, 2484: 14
+        }
+
+        # 5GHz帯の正確なマッピング
+        channels_5ghz = {
+            5180: 36, 5200: 40, 5220: 44, 5240: 48,
+            5260: 52, 5280: 56, 5300: 60, 5320: 64,
+            5500: 100, 5520: 104, 5540: 108, 5560: 112, 5580: 116,
+            5600: 120, 5620: 124, 5640: 128, 5660: 132, 5680: 136, 5700: 140,
+            5720: 144, 5745: 149, 5765: 153, 5785: 157, 5805: 161, 5825: 165,
+            5845: 169, 5865: 173, 5885: 177
+        }
+
+        # 2.4GHz帯のチャンネル判定（最も近い周波数を探す）
+        if 2400 <= freq_mhz <= 2500:
+            min_diff = float('inf')
+            best_ch = None
+            for freq, ch in channels_24ghz.items():
+                diff = abs(freq_mhz - freq)
+                if diff < min_diff:
+                    min_diff = diff
+                    best_ch = ch
+            if min_diff <= 3:  # 3MHz以内の誤差を許容
+                return best_ch, "2.4GHz"
+
+        # 5GHz帯のチャンネル判定（最も近い周波数を探す）
+        elif 5000 <= freq_mhz <= 6000:
+            min_diff = float('inf')
+            best_ch = None
+            for freq, ch in channels_5ghz.items():
+                diff = abs(freq_mhz - freq)
+                if diff < min_diff:
+                    min_diff = diff
+                    best_ch = ch
+            if min_diff <= 10:  # 10MHz以内の誤差を許容
+                return best_ch, "5GHz"
+
         return None, None
+
+    def on_graph_click(self, event):
+        """グラフクリック時のイベントハンドラ"""
+        if event.inaxes != self.ax:
+            return
+
+        # クリック位置に最も近いネットワークを検索
+        if not self.network_info_list:
+            return
+
+        min_dist = float('inf')
+        selected_network = None
+
+        for network in self.network_info_list:
+            # データ座標での距離を計算
+            dx = event.xdata - network["x"]
+            dy = event.ydata - network["y"]
+            dist = (dx**2 + dy**2) ** 0.5
+
+            if dist < min_dist:
+                min_dist = dist
+                selected_network = network
+
+        # 距離が十分近い場合のみ情報を表示（クリック範囲を制限）
+        threshold = 5 if self.band_var.get() == "2.4GHz" else 15
+        if min_dist < threshold:
+            self.show_network_info(selected_network)
+
+    def show_network_info(self, network):
+        """ネットワーク詳細情報を表示"""
+        info_window = tk.Toplevel(self.root)
+        info_window.title(f"ネットワーク情報: {network['ssid']}")
+        info_window.geometry("400x300")
+        info_window.resizable(False, False)
+
+        # ウィンドウを中央に配置
+        info_window.transient(self.root)
+        info_window.grab_set()
+
+        # 情報フレーム
+        info_frame = ttk.Frame(info_window, padding=20)
+        info_frame.pack(fill=tk.BOTH, expand=True)
+
+        # タイトル
+        title_label = ttk.Label(info_frame, text=network['ssid'],
+                               font=("MS Gothic", 14, "bold"),
+                               foreground=network['color'] if not network['is_connected'] else "#D32F2F")
+        title_label.pack(pady=(0, 15))
+
+        # 接続状態
+        if network['is_connected']:
+            status_label = ttk.Label(info_frame, text="● 接続中",
+                                    font=("MS Gothic", 10, "bold"),
+                                    foreground="#D32F2F")
+            status_label.pack(pady=5)
+
+        # 詳細情報
+        details_frame = ttk.Frame(info_frame)
+        details_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+
+        info_items = [
+            ("SSID名:", network['ssid']),
+            ("周波数帯:", network['band']),
+            ("チャンネル:", f"Ch {network['channel']}"),
+            ("信号強度:", f"{network['signal']} dBm"),
+            ("信号品質:", self.get_signal_quality(network['signal']))
+        ]
+
+        for i, (label, value) in enumerate(info_items):
+            label_widget = ttk.Label(details_frame, text=label,
+                                    font=("MS Gothic", 10, "bold"))
+            label_widget.grid(row=i, column=0, sticky=tk.W, pady=5, padx=(0, 10))
+
+            value_widget = ttk.Label(details_frame, text=value,
+                                    font=("MS Gothic", 10))
+            value_widget.grid(row=i, column=1, sticky=tk.W, pady=5)
+
+        # 閉じるボタン
+        close_btn = ttk.Button(info_frame, text="閉じる", command=info_window.destroy)
+        close_btn.pack(pady=(15, 0))
+
+        self.log_message(f"ネットワーク情報表示: {network['ssid']}")
+
+    def get_signal_quality(self, signal_dbm):
+        """信号強度から品質を判定"""
+        if signal_dbm >= -50:
+            return "優秀 (Excellent)"
+        elif signal_dbm >= -60:
+            return "良好 (Good)"
+        elif signal_dbm >= -70:
+            return "普通 (Fair)"
+        elif signal_dbm >= -80:
+            return "弱い (Weak)"
+        else:
+            return "非常に弱い (Very Weak)"
 
     def start_manual_scan(self):
         if not self.is_scanning:
@@ -323,6 +457,7 @@ class WifiAnalyzerApp:
         plt.rcParams['font.family'] = 'MS Gothic'
 
         self.ax.clear()
+        self.network_info_list = []  # ネットワーク情報リストをクリア
 
         # 軸データの生成
         x_min, x_max = (1, 14) if band == "2.4GHz" else (34, 179)
@@ -349,9 +484,8 @@ class WifiAnalyzerApp:
         label_positions = []  # [(x, y), ...]
 
         # ラベル重なり判定のしきい値
-        ch_threshold = 2 if band == "2.4GHz" else 8  # チャンネル近接しきい値
-        signal_threshold = 10  # 信号強度近接しきい値 (dBm)
-        y_offset_step = 8  # Y方向オフセット量 (dBm)
+        ch_threshold = 3 if band == "2.4GHz" else 10  # チャンネル近接しきい値（拡大）
+        y_offset_step = 10  # Y方向オフセット量 (dBm)（拡大）
 
         for idx, row in df.iterrows():
             is_connected = (row["ssid"] == connected_ssid)
@@ -367,9 +501,12 @@ class WifiAnalyzerApp:
             self.ax.fill_between(x_axis, y_curve, -100, color=color, alpha=0.3, zorder=z)
             self.ax.plot(x_axis, y_curve, color=color, linewidth=2.5 if is_connected else 1.5, zorder=z+1)
 
+            # ★改善されたラベル: SSID (Ch番号, 信号強度dBm)
+            label_text = f"{row['ssid']}\n(Ch{row['channel']}, {int(row['signal'])}dBm)"
+
             # ★スマートラベル配置: Y座標オフセット計算
             base_x = row["channel"]
-            base_y = row["signal"] + 2
+            base_y = row["signal"] + 3
             final_y = base_y
 
             # 既存ラベルとの重なりをチェックし、必要に応じてオフセット
@@ -379,7 +516,7 @@ class WifiAnalyzerApp:
                 y_diff = abs(final_y - prev_y)
 
                 # チャンネルが近く、かつY座標も近い場合はオフセット
-                if ch_diff <= ch_threshold and y_diff < y_offset_step:
+                if ch_diff <= ch_threshold and y_diff < y_offset_step * 1.5:
                     offset_count += 1
                     final_y = base_y + (offset_count * y_offset_step)
 
@@ -389,18 +526,35 @@ class WifiAnalyzerApp:
             # 描画位置を記録
             label_positions.append((base_x, final_y))
 
-            # ★フォントサイズを小さく、背景の透明度を上げて読みやすく
-            font_weight = "bold" if is_connected else "normal"
-            font_size = 9 if is_connected else 8  # 小さめに変更
+            # ★ネットワーク情報を保存（クリック検出用）
+            self.network_info_list.append({
+                "ssid": row["ssid"],
+                "channel": row["channel"],
+                "signal": int(row["signal"]),
+                "band": band,
+                "x": base_x,
+                "y": final_y,
+                "is_connected": is_connected,
+                "color": color
+            })
 
-            self.ax.text(base_x, final_y, row["ssid"],
+            # ★フォントサイズと色分け
+            font_weight = "bold" if is_connected else "normal"
+            font_size = 8 if is_connected else 7
+            # 接続中のネットワークは赤背景
+            bg_color = "#FFEBEE" if is_connected else "white"
+
+            # クリック可能なラベル（pickerを有効化）
+            text_obj = self.ax.text(base_x, final_y, label_text,
                          color="black",
                          fontsize=font_size,
                          fontweight=font_weight,
                          ha="center", va="bottom",
                          zorder=z+5,
                          rotation=0,
-                         bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.85))
+                         picker=True,
+                         bbox=dict(boxstyle="round,pad=0.3", fc=bg_color, ec=color, linewidth=1.2, alpha=0.9))
+            text_obj.set_gid(str(idx))  # インデックスを保存
 
         if band == "2.4GHz":
             self.ax.set_xticks(range(1, 15))
