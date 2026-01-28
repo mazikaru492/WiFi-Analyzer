@@ -28,6 +28,8 @@ class WifiAnalyzerApp:
         self.current_results = []
         self.current_ssid = ""
         self.network_info_list = []  # グラフ上のネットワーク情報リスト
+        self.info_window = None  # ネットワーク情報表示ウィンドウ（再利用用）
+        self.info_widgets = {}  # 情報ウィンドウ内のウィジェット参照
 
         # データ保持（Persistence）機能: キャッシュとTTL設定
         # キー: "SSID_チャンネル", 値: {"signal": 信号強度, "last_seen": 最終検出時刻, "ssid": SSID, "channel": チャンネル, "band": 周波数帯}
@@ -263,20 +265,19 @@ class WifiAnalyzerApp:
         if event.inaxes != self.ax:
             return
 
-        # クリック位置に最も近いネットワークを検索
+        # クリック位置に近いネットワークを検索
         if not self.network_info_list:
             self.log_message("ネットワーク情報がありません")
             return
 
-        min_dist = float('inf')
-        selected_network = None
-
         # X軸とY軸のスケールを正規化するための係数
-        # 2.4GHz: チャンネル1-14（範囲13）、5GHz: チャンネル34-179（範囲145）
-        # Y軸: -100 から -20 dBm（範囲80）
         band = self.band_var.get()
         x_range = 13 if band == "2.4GHz" else 145
         y_range = 80  # dBm範囲
+
+        # しきい値内のすべてのネットワークを収集
+        threshold = 0.20  # 20%の範囲内
+        nearby_networks = []
 
         for network in self.network_info_list:
             # 正規化された距離を計算（0-1スケール）
@@ -284,51 +285,88 @@ class WifiAnalyzerApp:
             dy = (event.ydata - network["y"]) / y_range
             dist = (dx**2 + dy**2) ** 0.5
 
-            if dist < min_dist:
-                min_dist = dist
-                selected_network = network
+            # チャンネル差も考慮（ラベルをクリックしやすくする）
+            ch_diff = abs(event.xdata - network["x"])
 
-        # 正規化された距離でのしきい値（より寛容に設定）
-        threshold = 0.15  # 15%の範囲内であればヒットとみなす
+            if dist < threshold or ch_diff <= 2.5:
+                nearby_networks.append((dist, network))
 
-        if selected_network is not None and min_dist < threshold:
-            self.show_network_info(selected_network)
-        elif selected_network is not None:
-            # しきい値を超えていても最も近いネットワークがあれば表示（より寛容なフォールバック）
-            # チャンネル差が小さい場合は表示
-            ch_diff = abs(event.xdata - selected_network["x"])
-            if ch_diff <= 3:
-                self.show_network_info(selected_network)
+        if not nearby_networks:
+            return
+
+        # 距離でソート
+        nearby_networks.sort(key=lambda x: x[0])
+
+        if len(nearby_networks) == 1:
+            # 1つだけなら直接表示
+            self.show_network_info(nearby_networks[0][1])
+        else:
+            # 複数ある場合は選択メニューを表示
+            self.show_network_selection_menu(event, [n[1] for n in nearby_networks])
+
+    def show_network_selection_menu(self, event, networks):
+        """複数のネットワークから選択するポップアップメニューを表示"""
+        menu = tk.Menu(self.root, tearoff=0, font=("MS Gothic", 10))
+
+        for network in networks:
+            # 接続中のネットワークにはマークを付ける
+            label = f"{'● ' if network['is_connected'] else ''}{network['ssid']} (Ch{network['channel']}, {network['signal']}dBm)"
+            menu.add_command(
+                label=label,
+                command=lambda n=network: self.show_network_info(n)
+            )
+
+        # マウス位置にメニューを表示
+        try:
+            # キャンバス上の座標をスクリーン座標に変換
+            canvas_widget = self.canvas.get_tk_widget()
+            x_screen = canvas_widget.winfo_rootx() + int(event.x)
+            y_screen = canvas_widget.winfo_rooty() + int(event.y)
+            menu.tk_popup(x_screen, y_screen)
+        except:
+            pass
+        finally:
+            menu.grab_release()
 
     def show_network_info(self, network):
-        """ネットワーク詳細情報を表示"""
-        info_window = tk.Toplevel(self.root)
-        info_window.title(f"ネットワーク情報: {network['ssid']}")
-        info_window.geometry("420x320")
-        info_window.resizable(False, False)
-        info_window.configure(bg="white")
+        """ネットワーク詳細情報を表示（既存ウィンドウがあれば再利用）"""
 
-        # ウィンドウを中央に配置
-        info_window.transient(self.root)
-        info_window.grab_set()
+        # ウィンドウが存在しない、または閉じられている場合は新規作成
+        if self.info_window is None or not self.info_window.winfo_exists():
+            self._create_info_window()
 
-        # 情報フレーム（tkを使用し、背景色を明示的に設定）
-        info_frame = tk.Frame(info_window, bg="white", padx=20, pady=20)
+        # ウィンドウの内容を更新
+        self._update_info_content(network)
+
+        # ウィンドウを前面に表示
+        self.info_window.lift()
+        self.info_window.focus_set()
+
+        self.log_message(f"ネットワーク情報表示: {network['ssid']}")
+
+    def _create_info_window(self):
+        """情報表示ウィンドウを新規作成"""
+        self.info_window = tk.Toplevel(self.root)
+        self.info_window.title("ネットワーク情報")
+        self.info_window.geometry("420x320")
+        self.info_window.resizable(False, False)
+        self.info_window.configure(bg="white")
+
+        # 情報フレーム
+        info_frame = tk.Frame(self.info_window, bg="white", padx=20, pady=20)
         info_frame.pack(fill=tk.BOTH, expand=True)
 
         # タイトル（SSID名）
-        title_color = "#D32F2F" if network['is_connected'] else "#333333"
-        title_label = tk.Label(info_frame, text=network['ssid'],
-                               font=("MS Gothic", 14, "bold"),
-                               fg=title_color, bg="white")
-        title_label.pack(pady=(0, 10))
+        self.info_widgets['title'] = tk.Label(info_frame, text="",
+                                              font=("MS Gothic", 14, "bold"),
+                                              fg="#333333", bg="white")
+        self.info_widgets['title'].pack(pady=(0, 10))
 
-        # 接続状態
-        if network['is_connected']:
-            status_label = tk.Label(info_frame, text="● 現在接続中",
-                                    font=("MS Gothic", 10, "bold"),
-                                    fg="#D32F2F", bg="white")
-            status_label.pack(pady=5)
+        # 接続状態ラベル
+        self.info_widgets['status'] = tk.Label(info_frame, text="",
+                                               font=("MS Gothic", 10, "bold"),
+                                               fg="#D32F2F", bg="white")
+        self.info_widgets['status'].pack(pady=5)
 
         # 区切り線
         separator = tk.Frame(info_frame, height=2, bg="#CCCCCC")
@@ -338,36 +376,61 @@ class WifiAnalyzerApp:
         details_frame = tk.Frame(info_frame, bg="white")
         details_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
-        # 情報項目
-        info_items = [
-            ("SSID名:", network['ssid']),
-            ("周波数帯:", network['band']),
-            ("チャンネル:", f"Ch {network['channel']}"),
-            ("信号強度:", f"{network['signal']} dBm"),
-            ("信号品質:", self.get_signal_quality(network['signal']))
-        ]
+        # 情報項目のラベルと値ウィジェットを作成
+        labels = ["SSID名:", "周波数帯:", "チャンネル:", "信号強度:", "信号品質:"]
+        self.info_widgets['values'] = []
 
-        for i, (label_text, value_text) in enumerate(info_items):
-            # ラベル（項目名）
+        for i, label_text in enumerate(labels):
             label_widget = tk.Label(details_frame, text=label_text,
                                     font=("MS Gothic", 10, "bold"),
                                     fg="#555555", bg="white", anchor="w")
             label_widget.grid(row=i, column=0, sticky=tk.W, pady=4, padx=(0, 15))
 
-            # 値
-            value_widget = tk.Label(details_frame, text=value_text,
+            value_widget = tk.Label(details_frame, text="",
                                     font=("MS Gothic", 10),
                                     fg="#000000", bg="white", anchor="w")
             value_widget.grid(row=i, column=1, sticky=tk.W, pady=4)
+            self.info_widgets['values'].append(value_widget)
 
         # 閉じるボタン
-        close_btn = tk.Button(info_frame, text="閉じる", command=info_window.destroy,
+        close_btn = tk.Button(info_frame, text="閉じる", command=self._close_info_window,
                               font=("MS Gothic", 10), bg="#4CAF50", fg="white",
                               activebackground="#45a049", activeforeground="white",
                               padx=20, pady=5, relief="flat", cursor="hand2")
         close_btn.pack(pady=(20, 0))
 
-        self.log_message(f"ネットワーク情報表示: {network['ssid']}")
+    def _update_info_content(self, network):
+        """情報表示ウィンドウの内容を更新"""
+        # タイトル更新
+        self.info_window.title(f"ネットワーク情報: {network['ssid']}")
+
+        # SSID名と色を更新
+        title_color = "#D32F2F" if network['is_connected'] else "#333333"
+        self.info_widgets['title'].config(text=network['ssid'], fg=title_color)
+
+        # 接続状態を更新
+        if network['is_connected']:
+            self.info_widgets['status'].config(text="● 現在接続中")
+        else:
+            self.info_widgets['status'].config(text="")
+
+        # 詳細情報を更新
+        values = [
+            network['ssid'],
+            network['band'],
+            f"Ch {network['channel']}",
+            f"{network['signal']} dBm",
+            self.get_signal_quality(network['signal'])
+        ]
+
+        for i, value in enumerate(values):
+            self.info_widgets['values'][i].config(text=value)
+
+    def _close_info_window(self):
+        """情報表示ウィンドウを閉じる"""
+        if self.info_window is not None:
+            self.info_window.destroy()
+            self.info_window = None
 
     def get_signal_quality(self, signal_dbm):
         """信号強度から品質を判定"""
