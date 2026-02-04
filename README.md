@@ -22,7 +22,7 @@
 
 ### 方法1：EXEファイルで起動（かんたん！Python不要）
 
-1. `dist` フォルダを開く
+1. `WiFi-Analyzer` フォルダの中にある `dist` フォルダを開く
 2. `WiFiAnalyzer.exe` をダブルクリック
 3. アプリが起動する！
 
