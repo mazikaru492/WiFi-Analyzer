@@ -65,6 +65,30 @@ class WifiAnalyzerApp:
         self.status_label = ttk.Label(self.ctrl_frame, text="準備完了", foreground="blue")
         self.status_label.pack(side=tk.RIGHT, padx=20)
 
+        # 信号強度フィルターフレーム
+        self.filter_frame = ttk.Frame(root, padding=5)
+        self.filter_frame.pack(side=tk.TOP, fill=tk.X, padx=5)
+
+        ttk.Label(self.filter_frame, text="信号強度フィルター:", font=("MS Gothic", 10)).pack(side=tk.LEFT, padx=5)
+
+        self.signal_filter_var = tk.IntVar(value=-100)  # デフォルトは全表示（-100 dBm以上）
+        self.signal_filter_scale = ttk.Scale(
+            self.filter_frame, from_=-100, to=-20,
+            orient=tk.HORIZONTAL, length=250,
+            variable=self.signal_filter_var,
+            command=self.on_signal_filter_change
+        )
+        self.signal_filter_scale.pack(side=tk.LEFT, padx=5)
+
+        self.filter_label = ttk.Label(self.filter_frame, text="-100 dBm 以上を表示", font=("MS Gothic", 10), width=22)
+        self.filter_label.pack(side=tk.LEFT, padx=5)
+
+        self.filter_count_label = ttk.Label(self.filter_frame, text="", foreground="gray", font=("MS Gothic", 9))
+        self.filter_count_label.pack(side=tk.LEFT, padx=5)
+
+        self.filter_reset_btn = ttk.Button(self.filter_frame, text="リセット", command=self.reset_signal_filter)
+        self.filter_reset_btn.pack(side=tk.LEFT, padx=5)
+
         self.graph_frame = ttk.Frame(root)
         self.graph_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=10, pady=5)
         plt.style.use("default")
@@ -460,12 +484,27 @@ class WifiAnalyzerApp:
             self.auto_btn.config(text="自動更新: ON")
             self.start_manual_scan()
 
+    def on_signal_filter_change(self, value):
+        """信号強度フィルタースライダー変更時のハンドラ"""
+        threshold = int(float(value))
+        self.signal_filter_var.set(threshold)
+        self.filter_label.config(text=f"{threshold} dBm 以上を表示")
+        self.refresh_graph_only()
+
+    def reset_signal_filter(self):
+        """信号強度フィルターをリセット（全表示に戻す）"""
+        self.signal_filter_var.set(-100)
+        self.signal_filter_scale.set(-100)
+        self.filter_label.config(text="-100 dBm 以上を表示")
+        self.refresh_graph_only()
+
     def refresh_graph_only(self):
         """周波数帯切り替え時にキャッシュデータからグラフを再描画"""
         # 生データ(current_results)ではなく、キャッシュから直接描画
         # これにより、帯域切り替え時もキャッシュが維持される
         current_time = time.time()
         target_band = self.band_var.get()
+        signal_threshold = self.signal_filter_var.get()
 
         # 期限切れデータを削除
         expired_keys = [
@@ -475,19 +514,22 @@ class WifiAnalyzerApp:
         for key in expired_keys:
             del self.wifi_cache[key]
 
-        # キャッシュから対象帯域のデータを抽出
+        # キャッシュから対象帯域のデータを抽出（信号強度フィルター適用）
         data = []
+        total_band_count = 0
         for key, value in self.wifi_cache.items():
             if value["band"] == target_band:
-                data.append({
-                    "channel": value["channel"],
-                    "signal": value["signal"],
-                    "ssid": value["ssid"],
-                    "band": value["band"]
-                })
+                total_band_count += 1
+                if value["signal"] >= signal_threshold:
+                    data.append({
+                        "channel": value["channel"],
+                        "signal": value["signal"],
+                        "ssid": value["ssid"],
+                        "band": value["band"]
+                    })
 
         df = pd.DataFrame(data)
-        self.update_graph(df, target_band)
+        self.update_graph(df, target_band, total_band_count)
 
     def scan_process(self):
         if pythoncom:
@@ -556,10 +598,12 @@ class WifiAnalyzerApp:
         for key in expired_keys:
             del self.wifi_cache[key]
 
-        # ステップ3: 現在の表示対象帯域でフィルタリング
+        # ステップ3: 現在の表示対象帯域でフィルタリング（信号強度フィルター適用）
         target_band = self.band_var.get()
+        signal_threshold = self.signal_filter_var.get()
         data = []
         unique_check = set()
+        total_band_count = 0
 
         for key, value in self.wifi_cache.items():
             if value["band"] != target_band:
@@ -570,24 +614,27 @@ class WifiAnalyzerApp:
                 continue
             unique_check.add(key)
 
-            data.append({
-                "channel": value["channel"],
-                "signal": value["signal"],
-                "ssid": value["ssid"],
-                "band": value["band"]
-            })
+            total_band_count += 1
 
-        print(f"{target_band}帯の有効データ: {len(data)} 件（キャッシュ総数: {len(self.wifi_cache)}）")
+            # 信号強度フィルター適用
+            if value["signal"] >= signal_threshold:
+                data.append({
+                    "channel": value["channel"],
+                    "signal": value["signal"],
+                    "ssid": value["ssid"],
+                    "band": value["band"]
+                })
+
+        print(f"{target_band}帯の有効データ: {len(data)}/{total_band_count} 件（キャッシュ総数: {len(self.wifi_cache)}）")
         df = pd.DataFrame(data)
-        self.root.after(0, lambda: self.update_graph(df, target_band))
+        self.root.after(0, lambda: self.update_graph(df, target_band, total_band_count))
 
     def _channel_axis(self, band):
         if band == "2.4GHz":
             return list(np_linspace(1, 14, 200)), list(range(1, 15)), (1, 14)
         return list(np_linspace(34, 179, 500)), list(range(34, 180, 8)), (34, 179)
 
-    def _curve(self, x_axis, center_ch, peak_dbm, band):
-        base = -100
+    def _curve(self, x_axis, center_ch, peak_dbm, band, base=-100):
         spread = 2.5 if band == "2.4GHz" else 5.0
         y_vals = []
         for x in x_axis:
@@ -599,7 +646,7 @@ class WifiAnalyzerApp:
             y_vals.append(max(y, base))
         return y_vals
 
-    def update_graph(self, df, band):
+    def update_graph(self, df, band, total_count=0):
         """キャッシュから作成したDataFrameでグラフを更新（スマートラベル配置対応）"""
         # ★白背景設定
         plt.style.use("default")
@@ -613,13 +660,19 @@ class WifiAnalyzerApp:
         step = (x_max - x_min) / 400
         x_axis = [x_min + i * step for i in range(401)]
 
+        # フィルター閾値に合わせてY軸の下限を動的に設定
+        signal_threshold = self.signal_filter_var.get()
+        y_min = signal_threshold - 5 if signal_threshold > -100 else -100
+        y_min = max(y_min, -100)  # -100未満にはしない
+
         # グリッド設定（見やすいグレー）
         self.ax.grid(True, linestyle="--", alpha=0.5, color="#999999")
-        self.ax.set_ylim(-100, -20)
+        self.ax.set_ylim(y_min, -20)
         self.ax.set_xlim(x_min, x_max)
 
         if df.empty:
-            self.ax.text((x_min+x_max)/2, -60, "No Wi-Fi Found", ha="center", color="#333", fontsize=14)
+            y_center = (y_min + (-20)) / 2
+            self.ax.text((x_min+x_max)/2, y_center, "No Wi-Fi Found", ha="center", color="#333", fontsize=14)
             self.canvas.draw()
             return
 
@@ -643,11 +696,11 @@ class WifiAnalyzerApp:
             if is_connected:
                 color = "#D32F2F"
 
-            y_curve = self._curve(x_axis, row["channel"], row["signal"], band)
+            y_curve = self._curve(x_axis, row["channel"], row["signal"], band, base=y_min)
 
             z = 10 if is_connected else 5
 
-            self.ax.fill_between(x_axis, y_curve, -100, color=color, alpha=0.3, zorder=z)
+            self.ax.fill_between(x_axis, y_curve, y_min, color=color, alpha=0.3, zorder=z)
             self.ax.plot(x_axis, y_curve, color=color, linewidth=2.5 if is_connected else 1.5, zorder=z+1)
 
             # ★改善されたラベル: SSID (Ch番号, 信号強度dBm)
@@ -715,7 +768,17 @@ class WifiAnalyzerApp:
         self.ax.set_title(f"Wi-Fi スペクトラム ({band})", fontsize=14, fontweight="bold")
 
         self.canvas.draw()
-        msg = f"{band}帯: {len(df)} 件検出"
+
+        # フィルター件数表示を更新
+        displayed = len(df)
+        if total_count > 0 and total_count != displayed:
+            self.filter_count_label.config(text=f"({displayed}/{total_count} 件表示中)", foreground="#D32F2F")
+        elif total_count > 0:
+            self.filter_count_label.config(text=f"({displayed} 件全表示)", foreground="gray")
+        else:
+            self.filter_count_label.config(text="")
+
+        msg = f"{band}帯: {displayed} 件検出"
         self.log_message(msg)
 
 def np_linspace(start, stop, num):
