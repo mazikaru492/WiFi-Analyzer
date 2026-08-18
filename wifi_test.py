@@ -27,14 +27,12 @@ class WifiAnalyzerApp:
         self.target_band = "2.4GHz"
         self.current_results = []
         self.current_ssid = ""
-        self.network_info_list = []  # グラフ上のネットワーク情報リスト
-        self.info_window = None  # ネットワーク情報表示ウィンドウ（再利用用）
-        self.info_widgets = {}  # 情報ウィンドウ内のウィジェット参照
+        self.network_info_list = []
+        self.info_window = None
+        self.info_widgets = {}
 
-        # データ保持（Persistence）機能: キャッシュとTTL設定
-        # キー: "SSID_チャンネル", 値: {"signal": 信号強度, "last_seen": 最終検出時刻, "ssid": SSID, "channel": チャンネル, "band": 周波数帯}
         self.wifi_cache = {}
-        self.cache_ttl = 10  # データ保持期間（秒）
+        self.cache_ttl = 10
 
         self.info_frame = ttk.Frame(root, padding=5, relief="groove")
         self.info_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
@@ -44,7 +42,6 @@ class WifiAnalyzerApp:
         self.ctrl_frame = ttk.Frame(root, padding=5)
         self.ctrl_frame.pack(side=tk.TOP, fill=tk.X)
 
-        # WiFiアダプター選択UI
         ttk.Label(self.ctrl_frame, text="アダプター: ").pack(side=tk.LEFT, padx=5)
         self.adapter_var = tk.StringVar()
         self.adapter_combo = ttk.Combobox(self.ctrl_frame, textvariable=self.adapter_var, state='readonly', width=30)
@@ -65,13 +62,12 @@ class WifiAnalyzerApp:
         self.status_label = ttk.Label(self.ctrl_frame, text="準備完了", foreground="blue")
         self.status_label.pack(side=tk.RIGHT, padx=20)
 
-        # 信号強度フィルターフレーム
         self.filter_frame = ttk.Frame(root, padding=5)
         self.filter_frame.pack(side=tk.TOP, fill=tk.X, padx=5)
 
         ttk.Label(self.filter_frame, text="信号強度フィルター:", font=("MS Gothic", 10)).pack(side=tk.LEFT, padx=5)
 
-        self.signal_filter_var = tk.IntVar(value=-100)  # デフォルトは全表示（-100 dBm以上）
+        self.signal_filter_var = tk.IntVar(value=-100)
         self.signal_filter_scale = ttk.Scale(
             self.filter_frame, from_=-100, to=-20,
             orient=tk.HORIZONTAL, length=250,
@@ -97,7 +93,6 @@ class WifiAnalyzerApp:
         self.fig.subplots_adjust(bottom=0.15)
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.graph_frame)
         self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        # クリックイベントを追加
         self.canvas.mpl_connect('button_press_event', self.on_graph_click)
         self.log_frame = ttk.LabelFrame(root, text="検出ログ", padding=5)
         self.log_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
@@ -111,46 +106,35 @@ class WifiAnalyzerApp:
         self.update_connection_info()
 
     def decode_ssid(self, ssid_raw):
-        """SSIDをデコードして正しい文字列に変換する"""
         if ssid_raw is None:
             return ""
 
-        # 既に文字列の場合
         if isinstance(ssid_raw, str):
-            # 文字化けしている可能性があるSSIDを修正
-            # Latin-1でエンコードされた文字列をUTF-8としてデコード
             try:
-                # 文字化けしているSSIDを修正するため、latin-1でバイト列に戻してUTF-8でデコード
                 fixed = ssid_raw.encode('latin-1').decode('utf-8')
                 return fixed
             except (UnicodeDecodeError, UnicodeEncodeError):
                 pass
 
-            # cp932でのデコードを試みる
             try:
                 fixed = ssid_raw.encode('latin-1').decode('cp932')
                 return fixed
             except (UnicodeDecodeError, UnicodeEncodeError):
                 pass
 
-            # そのまま返す
             return ssid_raw
 
-        # バイト列の場合
         if isinstance(ssid_raw, bytes):
-            # UTF-8でデコードを試みる
             try:
                 return ssid_raw.decode('utf-8')
             except UnicodeDecodeError:
                 pass
 
-            # cp932でデコードを試みる
             try:
                 return ssid_raw.decode('cp932')
             except UnicodeDecodeError:
                 pass
 
-            # latin-1でデコード（最終手段）
             return ssid_raw.decode('latin-1', errors='replace')
 
         return str(ssid_raw)
@@ -164,15 +148,12 @@ class WifiAnalyzerApp:
             self.scan_btn.config(state='disabled')
             self.iface = None
         else:
-            # アダプター一覧を作成
             adapter_names = []
             for idx, iface in enumerate(self.interfaces):
                 adapter_names.append(f"{idx}: {iface.name()}")
 
-            # コンボボックスに設定
             self.adapter_combo['values'] = adapter_names
 
-            # デフォルトは最後のアダプター（通常、外部アダプターは後に認識される）
             default_index = len(self.interfaces) - 1
             self.adapter_combo.current(default_index)
             self.iface = self.interfaces[default_index]
@@ -181,12 +162,10 @@ class WifiAnalyzerApp:
             self.log_message(f"選択中: {self.iface.name()}")
 
     def on_adapter_change(self, event=None):
-        """アダプター選択変更時の処理"""
         selected = self.adapter_combo.current()
         if 0 <= selected < len(self.interfaces):
             self.iface = self.interfaces[selected]
             self.log_message(f"アダプター切り替え: {self.iface.name()}")
-            # キャッシュをクリア
             self.wifi_cache.clear()
             self.update_connection_info()
 
@@ -198,10 +177,8 @@ class WifiAnalyzerApp:
             ip = socket.gethostbyname(hostname)
         except: pass
         try:
-            # netshコマンドの出力をバイト列として取得
             raw_output = subprocess.check_output("netsh wlan show interfaces", shell=True)
 
-            # UTF-8でデコードを試み、失敗したらcp932（Shift-JIS）を使用
             try:
                 output = raw_output.decode('utf-8')
             except UnicodeDecodeError:
@@ -234,21 +211,18 @@ class WifiAnalyzerApp:
     def frequency_to_channel(self, freq_value):
         if freq_value is None: return None, None
 
-        # 周波数の単位を正規化
         freq_mhz = freq_value
         if freq_value > 100_000_000:
             freq_mhz = freq_value / 1_000_000
         elif freq_value > 100_000:
             freq_mhz = freq_value / 1_000
 
-        # 2.4GHz帯の正確なマッピング
         channels_24ghz = {
             2412: 1, 2417: 2, 2422: 3, 2427: 4, 2432: 5,
             2437: 6, 2442: 7, 2447: 8, 2452: 9, 2457: 10,
             2462: 11, 2467: 12, 2472: 13, 2484: 14
         }
 
-        # 5GHz帯の正確なマッピング
         channels_5ghz = {
             5180: 36, 5200: 40, 5220: 44, 5240: 48,
             5260: 52, 5280: 56, 5300: 60, 5320: 64,
@@ -258,7 +232,6 @@ class WifiAnalyzerApp:
             5845: 169, 5865: 173, 5885: 177
         }
 
-        # 2.4GHz帯のチャンネル判定（最も近い周波数を探す）
         if 2400 <= freq_mhz <= 2500:
             min_diff = float('inf')
             best_ch = None
@@ -267,10 +240,9 @@ class WifiAnalyzerApp:
                 if diff < min_diff:
                     min_diff = diff
                     best_ch = ch
-            if min_diff <= 3:  # 3MHz以内の誤差を許容
+            if min_diff <= 3:
                 return best_ch, "2.4GHz"
 
-        # 5GHz帯のチャンネル判定（最も近い周波数を探す）
         elif 5000 <= freq_mhz <= 6000:
             min_diff = float('inf')
             best_ch = None
@@ -279,37 +251,31 @@ class WifiAnalyzerApp:
                 if diff < min_diff:
                     min_diff = diff
                     best_ch = ch
-            if min_diff <= 10:  # 10MHz以内の誤差を許容
+            if min_diff <= 10:
                 return best_ch, "5GHz"
 
         return None, None
 
     def on_graph_click(self, event):
-        """グラフクリック時のイベントハンドラ"""
         if event.inaxes != self.ax:
             return
 
-        # クリック位置に近いネットワークを検索
         if not self.network_info_list:
             self.log_message("ネットワーク情報がありません")
             return
 
-        # X軸とY軸のスケールを正規化するための係数
         band = self.band_var.get()
         x_range = 13 if band == "2.4GHz" else 145
-        y_range = 80  # dBm範囲
+        y_range = 80
 
-        # しきい値内のすべてのネットワークを収集
-        threshold = 0.20  # 20%の範囲内
+        threshold = 0.20
         nearby_networks = []
 
         for network in self.network_info_list:
-            # 正規化された距離を計算（0-1スケール）
             dx = (event.xdata - network["x"]) / x_range
             dy = (event.ydata - network["y"]) / y_range
             dist = (dx**2 + dy**2) ** 0.5
 
-            # チャンネル差も考慮（ラベルをクリックしやすくする）
             ch_diff = abs(event.xdata - network["x"])
 
             if dist < threshold or ch_diff <= 2.5:
@@ -318,31 +284,24 @@ class WifiAnalyzerApp:
         if not nearby_networks:
             return
 
-        # 距離でソート
         nearby_networks.sort(key=lambda x: x[0])
 
         if len(nearby_networks) == 1:
-            # 1つだけなら直接表示
             self.show_network_info(nearby_networks[0][1])
         else:
-            # 複数ある場合は選択メニューを表示
             self.show_network_selection_menu(event, [n[1] for n in nearby_networks])
 
     def show_network_selection_menu(self, event, networks):
-        """複数のネットワークから選択するポップアップメニューを表示"""
         menu = tk.Menu(self.root, tearoff=0, font=("MS Gothic", 10))
 
         for network in networks:
-            # 接続中のネットワークにはマークを付ける
             label = f"{'● ' if network['is_connected'] else ''}{network['ssid']} (Ch{network['channel']}, {network['signal']}dBm)"
             menu.add_command(
                 label=label,
                 command=lambda n=network: self.show_network_info(n)
             )
 
-        # マウス位置にメニューを表示
         try:
-            # キャンバス上の座標をスクリーン座標に変換
             canvas_widget = self.canvas.get_tk_widget()
             x_screen = canvas_widget.winfo_rootx() + int(event.x)
             y_screen = canvas_widget.winfo_rooty() + int(event.y)
@@ -353,54 +312,43 @@ class WifiAnalyzerApp:
             menu.grab_release()
 
     def show_network_info(self, network):
-        """ネットワーク詳細情報を表示（既存ウィンドウがあれば再利用）"""
 
-        # ウィンドウが存在しない、または閉じられている場合は新規作成
         if self.info_window is None or not self.info_window.winfo_exists():
             self._create_info_window()
 
-        # ウィンドウの内容を更新
         self._update_info_content(network)
 
-        # ウィンドウを前面に表示
         self.info_window.lift()
         self.info_window.focus_set()
 
         self.log_message(f"ネットワーク情報表示: {network['ssid']}")
 
     def _create_info_window(self):
-        """情報表示ウィンドウを新規作成"""
         self.info_window = tk.Toplevel(self.root)
         self.info_window.title("ネットワーク情報")
         self.info_window.geometry("420x320")
         self.info_window.resizable(False, False)
         self.info_window.configure(bg="white")
 
-        # 情報フレーム
         info_frame = tk.Frame(self.info_window, bg="white", padx=20, pady=20)
         info_frame.pack(fill=tk.BOTH, expand=True)
 
-        # タイトル（SSID名）
         self.info_widgets['title'] = tk.Label(info_frame, text="",
                                               font=("MS Gothic", 14, "bold"),
                                               fg="#333333", bg="white")
         self.info_widgets['title'].pack(pady=(0, 10))
 
-        # 接続状態ラベル
         self.info_widgets['status'] = tk.Label(info_frame, text="",
                                                font=("MS Gothic", 10, "bold"),
                                                fg="#D32F2F", bg="white")
         self.info_widgets['status'].pack(pady=5)
 
-        # 区切り線
         separator = tk.Frame(info_frame, height=2, bg="#CCCCCC")
         separator.pack(fill=tk.X, pady=10)
 
-        # 詳細情報フレーム
         details_frame = tk.Frame(info_frame, bg="white")
         details_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
-        # 情報項目のラベルと値ウィジェットを作成
         labels = ["SSID名:", "周波数帯:", "チャンネル:", "信号強度:", "信号品質:"]
         self.info_widgets['values'] = []
 
@@ -416,7 +364,6 @@ class WifiAnalyzerApp:
             value_widget.grid(row=i, column=1, sticky=tk.W, pady=4)
             self.info_widgets['values'].append(value_widget)
 
-        # 閉じるボタン
         close_btn = tk.Button(info_frame, text="閉じる", command=self._close_info_window,
                               font=("MS Gothic", 10), bg="#4CAF50", fg="white",
                               activebackground="#45a049", activeforeground="white",
@@ -424,21 +371,16 @@ class WifiAnalyzerApp:
         close_btn.pack(pady=(20, 0))
 
     def _update_info_content(self, network):
-        """情報表示ウィンドウの内容を更新"""
-        # タイトル更新
         self.info_window.title(f"ネットワーク情報: {network['ssid']}")
 
-        # SSID名と色を更新
         title_color = "#D32F2F" if network['is_connected'] else "#333333"
         self.info_widgets['title'].config(text=network['ssid'], fg=title_color)
 
-        # 接続状態を更新
         if network['is_connected']:
             self.info_widgets['status'].config(text="● 現在接続中")
         else:
             self.info_widgets['status'].config(text="")
 
-        # 詳細情報を更新
         values = [
             network['ssid'],
             network['band'],
@@ -451,13 +393,11 @@ class WifiAnalyzerApp:
             self.info_widgets['values'][i].config(text=value)
 
     def _close_info_window(self):
-        """情報表示ウィンドウを閉じる"""
         if self.info_window is not None:
             self.info_window.destroy()
             self.info_window = None
 
     def get_signal_quality(self, signal_dbm):
-        """信号強度から品質を判定"""
         if signal_dbm >= -50:
             return "優秀 (Excellent)"
         elif signal_dbm >= -60:
@@ -485,28 +425,22 @@ class WifiAnalyzerApp:
             self.start_manual_scan()
 
     def on_signal_filter_change(self, value):
-        """信号強度フィルタースライダー変更時のハンドラ"""
         threshold = int(float(value))
         self.signal_filter_var.set(threshold)
         self.filter_label.config(text=f"{threshold} dBm 以上を表示")
         self.refresh_graph_only()
 
     def reset_signal_filter(self):
-        """信号強度フィルターをリセット（全表示に戻す）"""
         self.signal_filter_var.set(-100)
         self.signal_filter_scale.set(-100)
         self.filter_label.config(text="-100 dBm 以上を表示")
         self.refresh_graph_only()
 
     def refresh_graph_only(self):
-        """周波数帯切り替え時にキャッシュデータからグラフを再描画"""
-        # 生データ(current_results)ではなく、キャッシュから直接描画
-        # これにより、帯域切り替え時もキャッシュが維持される
         current_time = time.time()
         target_band = self.band_var.get()
         signal_threshold = self.signal_filter_var.get()
 
-        # 期限切れデータを削除
         expired_keys = [
             key for key, value in self.wifi_cache.items()
             if current_time - value["last_seen"] > self.cache_ttl
@@ -514,7 +448,6 @@ class WifiAnalyzerApp:
         for key in expired_keys:
             del self.wifi_cache[key]
 
-        # キャッシュから対象帯域のデータを抽出（信号強度フィルター適用）
         data = []
         total_band_count = 0
         for key, value in self.wifi_cache.items():
@@ -542,7 +475,7 @@ class WifiAnalyzerApp:
         try:
             print("スキャン開始...")
             self.iface.scan()
-            time.sleep(1)  # スキャン結果待ち時間を短縮（元は4秒）
+            time.sleep(1)
             results = self.iface.scan_results()
 
             print(f"スキャン完了: 生データ {len(results)} 件")
@@ -560,14 +493,12 @@ class WifiAnalyzerApp:
             self.root.after(0, lambda: self.status_label.config(text="完了", foreground="green"))
 
             if self.auto_scan_active:
-                time.sleep(0.1)  # 次スキャンまでの待機を短縮（元は2秒）
+                time.sleep(0.1)
                 threading.Thread(target=self.scan_process, daemon=True).start()
 
     def process_results(self, results):
-        """スキャン結果をキャッシュにマージし、期限切れデータを削除後、グラフを更新"""
         current_time = time.time()
 
-        # ステップ1: スキャン結果をキャッシュに更新（両帯域とも処理）
         for network in results:
             ssid_raw = getattr(network, "ssid", "")
             ssid = self.decode_ssid(ssid_raw)
@@ -590,7 +521,6 @@ class WifiAnalyzerApp:
                 "band": band
             }
 
-        # ステップ2: 期限切れデータ（TTL超過）をキャッシュから削除
         expired_keys = [
             key for key, value in self.wifi_cache.items()
             if current_time - value["last_seen"] > self.cache_ttl
@@ -598,7 +528,6 @@ class WifiAnalyzerApp:
         for key in expired_keys:
             del self.wifi_cache[key]
 
-        # ステップ3: 現在の表示対象帯域でフィルタリング（信号強度フィルター適用）
         target_band = self.band_var.get()
         signal_threshold = self.signal_filter_var.get()
         data = []
@@ -609,14 +538,12 @@ class WifiAnalyzerApp:
             if value["band"] != target_band:
                 continue
 
-            # 重複チェック（同じSSID+チャンネルの組み合わせ）
             if key in unique_check:
                 continue
             unique_check.add(key)
 
             total_band_count += 1
 
-            # 信号強度フィルター適用
             if value["signal"] >= signal_threshold:
                 data.append({
                     "channel": value["channel"],
@@ -647,25 +574,20 @@ class WifiAnalyzerApp:
         return y_vals
 
     def update_graph(self, df, band, total_count=0):
-        """キャッシュから作成したDataFrameでグラフを更新（スマートラベル配置対応）"""
-        # ★白背景設定
         plt.style.use("default")
         plt.rcParams['font.family'] = 'MS Gothic'
 
         self.ax.clear()
-        self.network_info_list = []  # ネットワーク情報リストをクリア
+        self.network_info_list = []
 
-        # 軸データの生成
         x_min, x_max = (1, 14) if band == "2.4GHz" else (34, 179)
         step = (x_max - x_min) / 400
         x_axis = [x_min + i * step for i in range(401)]
 
-        # フィルター閾値に合わせてY軸の下限を動的に設定
         signal_threshold = self.signal_filter_var.get()
         y_min = signal_threshold - 5 if signal_threshold > -100 else -100
-        y_min = max(y_min, -100)  # -100未満にはしない
+        y_min = max(y_min, -100)
 
-        # グリッド設定（見やすいグレー）
         self.ax.grid(True, linestyle="--", alpha=0.5, color="#999999")
         self.ax.set_ylim(y_min, -20)
         self.ax.set_xlim(x_min, x_max)
@@ -679,15 +601,12 @@ class WifiAnalyzerApp:
         connected_ssid = (self.current_ssid or "").strip()
         colors = plt.cm.tab10.colors
 
-        # ★チャンネル順（昇順）でソート - ラベル重なり回避のため
         df = df.sort_values(by=["channel", "signal"], ascending=[True, False]).reset_index(drop=True)
 
-        # ★描画済みラベル位置を記録（重なり回避用）
-        label_positions = []  # [(x, y), ...]
+        label_positions = []
 
-        # ラベル重なり判定のしきい値
-        ch_threshold = 3 if band == "2.4GHz" else 10  # チャンネル近接しきい値（拡大）
-        y_offset_step = 10  # Y方向オフセット量 (dBm)（拡大）
+        ch_threshold = 3 if band == "2.4GHz" else 10
+        y_offset_step = 10
 
         for idx, row in df.iterrows():
             is_connected = (row["ssid"] == connected_ssid)
@@ -703,32 +622,25 @@ class WifiAnalyzerApp:
             self.ax.fill_between(x_axis, y_curve, y_min, color=color, alpha=0.3, zorder=z)
             self.ax.plot(x_axis, y_curve, color=color, linewidth=2.5 if is_connected else 1.5, zorder=z+1)
 
-            # ★改善されたラベル: SSID (Ch番号, 信号強度dBm)
             label_text = f"{row['ssid']}\n(Ch{row['channel']}, {int(row['signal'])}dBm)"
 
-            # ★スマートラベル配置: Y座標オフセット計算
             base_x = row["channel"]
             base_y = row["signal"] + 3
             final_y = base_y
 
-            # 既存ラベルとの重なりをチェックし、必要に応じてオフセット
             offset_count = 0
             for prev_x, prev_y in label_positions:
                 ch_diff = abs(base_x - prev_x)
                 y_diff = abs(final_y - prev_y)
 
-                # チャンネルが近く、かつY座標も近い場合はオフセット
                 if ch_diff <= ch_threshold and y_diff < y_offset_step * 1.5:
                     offset_count += 1
                     final_y = base_y + (offset_count * y_offset_step)
 
-            # Y座標が上限を超えないように制限
             final_y = min(final_y, -22)
 
-            # 描画位置を記録
             label_positions.append((base_x, final_y))
 
-            # ★ネットワーク情報を保存（クリック検出用）
             self.network_info_list.append({
                 "ssid": row["ssid"],
                 "channel": row["channel"],
@@ -740,13 +652,10 @@ class WifiAnalyzerApp:
                 "color": color
             })
 
-            # ★フォントサイズと色分け
             font_weight = "bold" if is_connected else "normal"
             font_size = 8 if is_connected else 7
-            # 接続中のネットワークは赤背景
             bg_color = "#FFEBEE" if is_connected else "white"
 
-            # クリック可能なラベル（pickerを有効化）
             text_obj = self.ax.text(base_x, final_y, label_text,
                          color="black",
                          fontsize=font_size,
@@ -756,7 +665,7 @@ class WifiAnalyzerApp:
                          rotation=0,
                          picker=True,
                          bbox=dict(boxstyle="round,pad=0.3", fc=bg_color, ec=color, linewidth=1.2, alpha=0.9))
-            text_obj.set_gid(str(idx))  # インデックスを保存
+            text_obj.set_gid(str(idx))
 
         if band == "2.4GHz":
             self.ax.set_xticks(range(1, 15))
@@ -769,7 +678,6 @@ class WifiAnalyzerApp:
 
         self.canvas.draw()
 
-        # フィルター件数表示を更新
         displayed = len(df)
         if total_count > 0 and total_count != displayed:
             self.filter_count_label.config(text=f"({displayed}/{total_count} 件表示中)", foreground="#D32F2F")
